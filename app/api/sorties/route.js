@@ -1,12 +1,12 @@
 import { NextResponse } from 'next/server';
-import { getStore } from '../../../lib/store';
+import { getStore, storeEnvNames } from '../../../lib/store';
 
 export const dynamic = 'force-dynamic';
 const KEY = 'sorties:v1';
 
 export async function GET() {
   const store = getStore();
-  if (!store) return NextResponse.json({ sorties: [], enabled: false });
+  if (!store) return NextResponse.json({ sorties: [], enabled: false, envNames: storeEnvNames() });
   const v = (await store.get(KEY)) || [];
   return NextResponse.json({ sorties: v, enabled: true });
 }
