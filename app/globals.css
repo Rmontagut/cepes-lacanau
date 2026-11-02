@@ -127,3 +127,4 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .day.best { border-color: #E2A43A; box-shadow: 0 0 0 2px #E2A43A, var(--shadow); }
 .day .star { position: absolute; top: -7px; right: -4px; font-size: 13px; color: #E2A43A; text-shadow: 0 0 2px var(--surface); }
 .topbar .row { padding-top: 8px; }
+.legend .note { display: block; max-width: 170px; line-height: 1.35; }

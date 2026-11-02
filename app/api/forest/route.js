@@ -5,7 +5,8 @@ export const maxDuration = 30;
 
 const TILE = 0.03; // degrés (~2,4 × 3,3 km)
 const WFS = 'https://data.geopf.fr/wfs/ows';
-const WATER_WEIGHT = { Lac: 1, Marais: 1, Mare: 0.8, 'Ecoulement naturel': 0.9, Canal: 0.7, Retenue: 0.6 };
+// Les grands plans d'eau et marais comptent plein pot ; mares, retenues et fossés beaucoup moins
+const WATER_WEIGHT = { Lac: 1, Marais: 1, Mare: 0.35, 'Ecoulement naturel': 0.5, Canal: 0.3, Retenue: 0.25 };
 
 async function wfsAll(typename, bbox, propertyName) {
   const out = [];
@@ -130,8 +131,8 @@ export async function GET(req) {
           for (const w of near(q)) {
             const dx = (q[0] - w[0]) * coslat * 111320; const dy = (q[1] - w[1]) * 110540;
             const d = Math.sqrt(dx * dx + dy * dy);
-            // 0–150 m : plein effet ; s'annule vers 1,5 km
-            const h = w[2] * Math.max(0, Math.min(1, 1 - (d - 150) / 1350));
+            // 0–100 m : plein effet ; s'annule vers 900 m
+            const h = w[2] * Math.max(0, Math.min(1, 1 - (d - 100) / 800));
             if (h > best || (h === best && (bestDist === null || d < bestDist))) { best = h; bestDist = d; bestNat = w[3]; }
           }
         }

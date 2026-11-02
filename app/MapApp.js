@@ -34,7 +34,8 @@ const RES = { rien: 'Rien', quelques: 'Quelques-uns', bonne: 'Belle récolte' };
 // Météo par tuile (~2,5 × 3,3 km), au centre de la tuile
 const cellKey = (lat, lon) => `${lat.toFixed(3)},${lon.toFixed(3)}`;
 const tileCenterKey = (lat, lon) => cellKey((Math.floor(lat / 0.03) + 0.5) * 0.03, (Math.floor(lon / 0.03) + 0.5) * 0.03);
-const tierOf = (sc) => (sc >= 85 ? 3 : sc >= 65 ? 2 : 1);
+// ++ : score haut ET aucune condition défavorable ce jour-là
+const tierOf = (sc, pen = 0) => (sc >= 85 && pen === 0 ? 3 : sc >= 65 ? 2 : 1);
 const SPECIES_COLOR = { cepes: ['#7A4A24', '#F2E6D2'], girolle: ['#E8A317', '#F6D27A'], 'chanterelle-tube': ['#5E5444', '#E2C54B'], 'lactaire-delicieux': ['#E2662A', '#F4B07E'] };
 function colorFor(id) {
   if (SPECIES_COLOR[id]) return SPECIES_COLOR[id];
@@ -146,7 +147,7 @@ export default function MapApp() {
     ensureMeteo(ck);
     setLoading((n) => n + 1);
     try {
-      const r = await fetch(`/api/forest?tx=${tx}&ty=${ty}`);
+      const r = await fetch(`/api/forest?tx=${tx}&ty=${ty}&v=2`);
       if (!r.ok) throw new Error();
       const j = await r.json();
       for (const f of j.features) {
@@ -252,7 +253,7 @@ export default function MapApp() {
         const ip = f.properties._ip;
         if (ip) {
           const id = e.best.s.id;
-          const tier = tierOf(sc);
+          const tier = tierOf(sc, e.best.r.pen);
           const img = `mush-${id}-${tier}`;
           if (!m.hasImage(img)) { const [cap, stem] = colorFor(id); m.addImage(img, mushroomImage(cap, stem, tier), { pixelRatio: 2 }); }
           ripe.push({ type: 'Feature', properties: { fid: f.properties.fid, hab: f.properties.hab, icon: img, sc, tier }, geometry: { type: 'Point', coordinates: ip } });
@@ -518,7 +519,7 @@ function Parcelle({ f, evalFeature, species, dayIso, onClose, onNote }) {
     <Sheet title={HABITATS[p.hab] || 'Parcelle'} sub={`${p.tfv}${dayIso ? ` · ${fmtD(dayIso)}` : ''}`} onClose={onClose}>
       <div className="facts">
         <div className="fact"><span className="label">Humidité locale</span><b>{Math.round((p.h || 0) * 100)} %</b></div>
-        <div className="fact"><span className="label">Eau la plus proche</span><b>{p.dw == null ? '> 1,5 km' : `${p.dw} m`}</b>{p.wn && <span className="note">{p.wn}</span>}</div>
+        <div className="fact"><span className="label">Eau la plus proche</span><b>{p.dw == null ? '> 1 km' : `${p.dw} m`}</b>{p.wn && <span className="note">{p.wn}</span>}</div>
       </div>
       {!e && <p className="note">Météo en cours de chargement…</p>}
       {e && e.all.length === 0 && <p className="note">Aucune des espèces suivies n'est associée à ce type de forêt.</p>}
