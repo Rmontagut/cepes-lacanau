@@ -64,6 +64,34 @@ function mushroomImage(cap, stem, tier = 1) {
   return g.getImageData(0, 0, W, S);
 }
 
+// Plusieurs espèces mûres sur une même parcelle : champignons groupés en paquet
+function bundleImage(ids, tier) {
+  if (ids.length === 1) { const [cap, stem] = colorFor(ids[0]); return mushroomImage(cap, stem, tier); }
+  const S = 64; const step = 18; const W = 64 + step * (ids.length - 1) + (tier >= 2 ? 30 : 0);
+  const c = document.createElement('canvas'); c.width = W; c.height = S;
+  const g = c.getContext('2d'); g.lineJoin = 'round';
+  // du fond vers l'avant : le meilleur score devant, à gauche
+  for (let k = ids.length - 1; k >= 0; k--) {
+    const [cap, stem] = colorFor(ids[k]);
+    const sc = k === 0 ? 1 : 0.86;
+    g.save(); g.translate(k * step + (1 - sc) * 32, (1 - sc) * 60); g.scale(sc, sc);
+    const drawStem = () => { g.beginPath(); g.moveTo(25, 34); g.quadraticCurveTo(22, 54, 26, 58); g.lineTo(38, 58); g.quadraticCurveTo(42, 54, 39, 34); g.closePath(); };
+    const drawCap = () => { g.beginPath(); g.moveTo(8, 36); g.bezierCurveTo(8, 10, 56, 10, 56, 36); g.quadraticCurveTo(32, 42, 8, 36); g.closePath(); };
+    g.lineWidth = 5; g.strokeStyle = '#FFFFFF';
+    drawStem(); g.stroke(); drawCap(); g.stroke();
+    drawStem(); g.fillStyle = stem; g.fill(); drawCap(); g.fillStyle = cap; g.fill();
+    g.restore();
+  }
+  if (tier >= 2) {
+    const label = tier === 3 ? '++' : '+'; const bx = W - (tier === 3 ? 38 : 28);
+    g.beginPath(); g.roundRect(bx, 2, tier === 3 ? 36 : 26, 24, 12); g.fillStyle = tier === 3 ? '#13A538' : '#1F2A1C'; g.fill();
+    g.lineWidth = 3; g.strokeStyle = '#FFFFFF'; g.stroke();
+    g.fillStyle = '#FFFFFF'; g.font = 'bold 20px system-ui, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(label, bx + (tier === 3 ? 18 : 13), 15);
+  }
+  return g.getImageData(0, 0, W, S);
+}
+
 // Point intérieur d'un polygone : milieu du plus long segment horizontal au niveau du centroïde
 function interiorPoint(geom) {
   let best = null; let bestA = -1;
@@ -249,15 +277,16 @@ export default function MapApp() {
       const st = !e ? 'na' : e.best ? e.best.r.status : 'na';
       const sc = e && e.best ? e.best.r.score : 0;
       out.push({ ...f, properties: { ...f.properties, st, sc, fit: !!(e && e.best) } });
-      if (e && e.best && e.best.r.status === 'ouverte') {
+      const ripeSp = e && e.all ? e.all.filter((x) => x.r.status === 'ouverte').sort((x, y) => y.r.score - x.r.score) : [];
+      if (ripeSp.length) {
         if (!f.properties._ip) f.properties._ip = interiorPoint(f.geometry);
         const ip = f.properties._ip;
         if (ip) {
-          const id = e.best.s.id;
-          const tier = tierOf(sc, e.best.r.pen);
-          const img = `mush-${id}-${tier}`;
-          if (!m.hasImage(img)) { const [cap, stem] = colorFor(id); m.addImage(img, mushroomImage(cap, stem, tier), { pixelRatio: 2 }); }
-          ripe.push({ type: 'Feature', properties: { fid: f.properties.fid, hab: f.properties.hab, icon: img, sc, tier }, geometry: { type: 'Point', coordinates: ip } });
+          const ids = ripeSp.slice(0, 3).map((x) => x.s.id);
+          const tier = tierOf(ripeSp[0].r.score, ripeSp[0].r.pen);
+          const img = `mush-${ids.join('+')}-${tier}`;
+          if (!m.hasImage(img)) m.addImage(img, bundleImage(ids, tier), { pixelRatio: 2 });
+          ripe.push({ type: 'Feature', properties: { fid: f.properties.fid, hab: f.properties.hab, icon: img, sc: ripeSp[0].r.score, tier, n: ripeSp.length }, geometry: { type: 'Point', coordinates: ip } });
         }
       }
     }
@@ -342,8 +371,8 @@ export default function MapApp() {
                 'icon-image': ['get', 'icon'],
                 'icon-size': ['match', ['get', 'tier'], 3, 1.05, 2, 0.8, 0.55],
                 'icon-allow-overlap': ['step', ['zoom'], false, 14, true],
-                'icon-anchor': 'bottom',
-                'icon-offset': ['match', ['get', 'tier'], 1, ['literal', [0, 0]], ['literal', [7, 0]]],
+                'icon-anchor': 'bottom-left',
+                'icon-offset': [-16, 0],
                 'symbol-sort-key': ['-', 100, ['get', 'sc']],
               },
               paint: {
@@ -401,7 +430,7 @@ export default function MapApp() {
     for (let o = -7; o <= 9; o++) {
       const i = i0 + o; if (i < 0 || i >= refMeteo.time.length) continue;
       const d = new Date(`${refMeteo.time[i]}T12:00:00`);
-      arr.push({ o, iso: refMeteo.time[i], wd: o === 0 ? 'auj.' : WEEKDAY[d.getDay()], n: d.getDate(), rain: refMeteo.rain[i] });
+      arr.push({ o, iso: refMeteo.time[i], wd: o === 0 ? 'auj.' : WEEKDAY[d.getDay()], n: d.getDate(), rain: refMeteo.rain[i], long: d.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' }) });
     }
     return arr;
   })() : [];
@@ -412,16 +441,7 @@ export default function MapApp() {
 
       <div className="topbar">
         {days.length > 0 && (
-          <div className="row" role="group" aria-label="Jour">
-            {days.map((d) => (
-              <button key={d.iso} type="button" className={`day${d.o > 0 ? ' fc' : ''}${bestDay === d.o ? ' best' : ''}`} aria-pressed={offset === d.o} onClick={() => setOffset(d.o)}
-                title={`${fmtD(d.iso)} · potentiel ${dayPotential[d.o] ?? 0}${bestDay === d.o ? ' · meilleur jour à venir' : ''}`}>
-                {bestDay === d.o && <span className="star" aria-label="Meilleur jour pour récolter">★</span>}
-                <small>{d.wd}</small><b>{d.n}</b><span className="rain">{d.rain >= 0.5 ? `${Math.round(d.rain)} mm` : ' '}</span>
-                <span className="pot" aria-hidden="true"><i style={{ width: `${Math.max(0, Math.min(100, dayPotential[d.o] ?? 0))}%` }} /></span>
-              </button>
-            ))}
-          </div>
+          <DayStrip days={days} offset={offset} setOffset={setOffset} dayPotential={dayPotential} meteo={refMeteo} />
         )}
         {!zoomOk && <div className="hint">Zoome pour afficher les parcelles forestières</div>}
         {zoomOk && loading > 0 && <div className="hint">Chargement des parcelles IGN…</div>}
@@ -478,16 +498,26 @@ export default function MapApp() {
               </button>
             ))}
           </div>
-          <div className="tools">
-            <button type="button" className="chip" onClick={() => setPanel({ type: 'carnet' })}>Carnet</button>
-            <button type="button" className="chip" onClick={() => setPanel({ type: 'especes' })}>Espèces et seuils</button>
-          </div>
         </div>
       )}
 
+      {!panel && (
+        <div className="fabs">
+          <button type="button" className="fab" onClick={() => setPanel({ type: 'especes' })} aria-label="Espèces et seuils"><GearIcon /></button>
+          <button type="button" className="fab primary" onClick={() => setPanel({ type: 'carnet' })} aria-label="Carnet de sorties"><PencilIcon /></button>
+        </div>
+      )}
+
+
       {panel?.type === 'parcelle' && (
         <Parcelle f={features.current.get(panel.fid)} evalFeature={evalFeature} species={species} dayIso={dayIso}
-          onClose={closePanel} onNote={() => setPanel({ type: 'carnet', at: panel.lngLat })} />
+          onClose={closePanel} onNote={() => setPanel({ type: 'carnet', at: panel.lngLat })}
+          onOpen={(sid) => setPanel({ ...panel, type: 'detail', sid })} />
+      )}
+      {panel?.type === 'detail' && (
+        <Detail f={features.current.get(panel.fid)} sid={panel.sid} evalFeature={evalFeature} dayIso={dayIso}
+          meteo={meteoRef.current.get(features.current.get(panel.fid)?.properties.ck)}
+          onBack={() => setPanel({ ...panel, type: 'parcelle' })} onClose={closePanel} />
       )}
       {panel?.type === 'carnet' && (
         <Carnet sorties={sorties} species={species} enabled={carnetOn} at={panel.at} geoPos={geoPos} findForest={findForest}
@@ -496,6 +526,97 @@ export default function MapApp() {
       {panel?.type === 'especes' && (
         <Especes species={species} editable={editable} sorties={sorties} onClose={closePanel} reload={loadSpecies} />
       )}
+    </div>
+  );
+}
+
+const medalOf = (sc) => (sc >= 85 ? 'gold' : sc >= 65 ? 'silver' : sc >= 45 ? 'bronze' : 'none');
+const MEDAL_LABEL = { gold: 'Or : journée à champignons', silver: 'Argent : bonnes chances', bronze: 'Bronze : jouable', none: 'Peu de chances' };
+const MEDAL = {
+  gold: { stops: ['#FFF1B0', '#E8B923', '#A97A06'], stroke: '#6E4E04' },
+  silver: { stops: ['#FFFFFF', '#C3C9D0', '#858C94'], stroke: '#5C6269' },
+  bronze: { stops: ['#F6CFA6', '#BB7638', '#7A4520'], stroke: '#53301A' },
+  none: { stops: ['#FFFFFF', '#FFFFFF', '#F2F2EE'], stroke: '#A6AD9E' },
+};
+const MUSH_CAP = 'M3 16 C3 4 29 4 29 16 Q16 19.5 3 16 Z';
+const MUSH_STEM = 'M12 17.5 Q10.6 26.5 12.6 29 L19.4 29 Q21.4 26.5 20 17.5 Z';
+
+// Silhouette de champignon médaillée (or, argent, bronze, vide) avec liseré métal
+function MedalMush({ medal = 'none', size = 24 }) {
+  const m = MEDAL[medal] || MEDAL.none;
+  const id = `g-${medal}`;
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true" className="medal-mush">
+      <defs>
+        <linearGradient id={id} x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor={m.stops[0]} /><stop offset=".55" stopColor={m.stops[1]} /><stop offset="1" stopColor={m.stops[2]} />
+        </linearGradient>
+      </defs>
+      <path d={MUSH_STEM} fill={`url(#${id})`} stroke={m.stroke} strokeWidth="1.6" strokeLinejoin="round" />
+      <path d={MUSH_CAP} fill={`url(#${id})`} stroke={m.stroke} strokeWidth="1.6" strokeLinejoin="round" />
+      {medal !== 'none' && <path d="M9 10.5 Q12 7.5 16 7.2" fill="none" stroke="#FFFFFF" strokeOpacity=".7" strokeWidth="1.4" strokeLinecap="round" />}
+    </svg>
+  );
+}
+
+function WeatherGlyph({ rain }) {
+  if (rain >= 1) {
+    const drops = rain >= 8 ? 3 : rain >= 3 ? 2 : 1;
+    return (
+      <svg width="18" height="16" viewBox="0 0 18 16" aria-label={`${Math.round(rain)} mm`}>
+        {[...Array(drops)].map((_, k) => (
+          <path key={k} d={`M${4 + k * 5} 3 C${4 + k * 5} 3 ${1.5 + k * 5} 7.5 ${1.5 + k * 5} 9.5 A2.5 2.5 0 0 0 ${6.5 + k * 5} 9.5 C${6.5 + k * 5} 7.5 ${4 + k * 5} 3 ${4 + k * 5} 3 Z`} fill="#3C7FC0" />
+        ))}
+      </svg>
+    );
+  }
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-label="sec">
+      <circle cx="8" cy="8" r="3.3" fill="#F2B21B" />
+      {[0, 45, 90, 135, 180, 225, 270, 315].map((a) => (
+        <line key={a} x1="8" y1="1.6" x2="8" y2="3.2" stroke="#F2B21B" strokeWidth="1.4" strokeLinecap="round" transform={`rotate(${a} 8 8)`} />
+      ))}
+    </svg>
+  );
+}
+
+const PencilIcon = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l1.2-4.6L15.6 5a2 2 0 0 1 2.8 0l.6.6a2 2 0 0 1 0 2.8L8.6 18.8 4 20z" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinejoin="round" /><path d="M13.8 6.8l3.4 3.4" stroke="currentColor" strokeWidth="1.9" /></svg>
+);
+const GearIcon = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" strokeWidth="1.9" /><path d="M12 2.8v2.6M12 18.6v2.6M2.8 12h2.6M18.6 12h2.6M5.5 5.5l1.9 1.9M16.6 16.6l1.9 1.9M5.5 18.5l1.9-1.9M16.6 7.4l1.9-1.9" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" /></svg>
+);
+
+// Jour sélectionné en grand + frise des jours avec météo, médaille et repère
+function DayStrip({ days, offset, setOffset, dayPotential, meteo }) {
+  const sel = days.find((d) => d.o === offset) || days.find((d) => d.o === 0);
+  const pot = dayPotential[sel.o] ?? 0;
+  const medal = medalOf(pot);
+  const i = meteo ? meteo.time.indexOf(sel.iso) : -1;
+  return (
+    <div className="daybox">
+      <div className={`dayfocus medal-${medal}`}>
+        <MedalMush medal={medal} size={40} />
+        <div className="df-text">
+          <span className="df-day">{sel.o === 0 ? "Aujourd'hui" : sel.long}</span>
+          <span className="df-medal">{MEDAL_LABEL[medal]}</span>
+        </div>
+        <div className="df-right">
+          <span className="df-score"><b>{pot}</b><small>/100</small></span>
+          {i >= 0 && <span className="df-wx"><WeatherGlyph rain={meteo.rain[i]} /> {Math.round(meteo.tmin[i])}°/{Math.round(meteo.tmax[i])}°</span>}
+        </div>
+      </div>
+      <div className="strip" role="group" aria-label="Jours">
+        {days.map((d) => (
+          <button key={d.iso} type="button" className={`sd${d.o === offset ? ' on' : ''}${d.o === 0 ? ' today' : ''}${d.o > 0 ? ' fc' : ''}`}
+            aria-pressed={d.o === offset} onClick={() => setOffset(d.o)} title={`${fmtD(d.iso)} · indice ${dayPotential[d.o] ?? 0}`}>
+            <span className="sd-wx"><WeatherGlyph rain={d.rain} /></span>
+            <span className="sd-wd">{d.wd}</span>
+            <span className="sd-n">{d.n}</span>
+            <MedalMush medal={medalOf(dayPotential[d.o] ?? 0)} size={18} />
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -512,35 +633,83 @@ function Sheet({ title, sub, onClose, children }) {
   );
 }
 
-function Parcelle({ f, evalFeature, species, dayIso, onClose, onNote }) {
+function Parcelle({ f, evalFeature, species, dayIso, onClose, onNote, onOpen }) {
   if (!f) return null;
   const p = f.properties;
   const e = evalFeature(f, false);
-  const others = species.filter((s) => !(s.habitats || []).includes(p.hab));
+  const list = e ? e.all.slice().sort((a, b) => b.r.score - a.r.score) : [];
   return (
-    <Sheet title={HABITATS[p.hab] || 'Parcelle'} sub={`${p.tfv}${dayIso ? ` · ${fmtD(dayIso)}` : ''}`} onClose={onClose}>
-      <div className="facts">
-        <div className="fact"><span className="label">Humidité locale</span><b>{Math.round((p.h || 0) * 100)} %</b></div>
-        <div className="fact"><span className="label">Eau la plus proche</span><b>{p.dw == null ? '> 1 km' : `${p.dw} m`}</b>{p.wn && <span className="note">{p.wn}</span>}</div>
-      </div>
+    <Sheet title={HABITATS[p.hab] || 'Parcelle'} sub={dayIso ? fmtD(dayIso) : ''} onClose={onClose}>
       {!e && <p className="note">Météo en cours de chargement…</p>}
-      {e && e.all.length === 0 && <p className="note">Aucune des espèces suivies n'est associée à ce type de forêt.</p>}
-      {e && e.all.slice().sort((a, b) => b.r.score - a.r.score).map(({ s, r }) => (
-        <div className="sp" key={s.id}>
-          <div className="sp-top">
-            <div><h3>{s.nom}</h3><span className={`pill s-${r.status}`}>{STATUS_LABEL[r.status]}</span></div>
-            <span className="score">{r.score}</span>
-          </div>
-          <ul className="reasons">{r.reasons.map((t) => <li key={t}>{t}</li>)}</ul>
-          <div className="tips">
-            {s.arbres && <p>{s.arbres}</p>}
-            {s.conseils?.length > 0 && <ul>{s.conseils.map((c) => <li key={c}>{c}</li>)}</ul>}
-          </div>
-          {s.confusions && <p className="confusion"><strong>Confusions :</strong> {s.confusions}</p>}
+      {e && list.length === 0 && <p className="note">Aucune des espèces suivies ne pousse sur ce type de forêt.</p>}
+      <div className="sp-list">
+        {list.map(({ s, r }) => (
+          <button key={s.id} type="button" className="sp-row" onClick={() => onOpen(s.id)}>
+            <span className="sp-dot" style={{ background: colorFor(s.id)[0] }} />
+            <span className="sp-name">{s.nom}</span>
+            <MedalMush medal={medalOf(r.score)} size={22} />
+            <span className="sp-score"><b>{r.score}</b><small>/100</small></span>
+            <span className="chev" aria-hidden="true">›</span>
+          </button>
+        ))}
+      </div>
+      <div className="actions"><button type="button" className="btn ghost" onClick={onNote}><PencilIcon /> Noter une sortie ici</button></div>
+    </Sheet>
+  );
+}
+
+function Detail({ f, sid, evalFeature, dayIso, meteo, onBack, onClose }) {
+  if (!f) return null;
+  const p = f.properties;
+  const e = evalFeature(f, false);
+  const hit = e?.all.find((x) => x.s.id === sid);
+  if (!hit) return null;
+  const { s, r } = hit;
+  const medal = medalOf(r.score);
+  let ctx = null;
+  if (meteo && meteo.time) {
+    const i = dayIndex(meteo, dayIso);
+    let r7 = 0; for (let k = Math.max(0, i - 6); k <= i; k++) r7 += meteo.rain[k];
+    let dry = 0; for (let k = i; k >= 0 && meteo.rain[k] < 1; k--) dry++;
+    let nextRain = null; for (let k = i + 1; k < meteo.time.length; k++) if (meteo.rain[k] >= 2) { nextRain = k; break; }
+    ctx = { r7, dry, tmin: meteo.tmin[i], tmax: meteo.tmax[i], next: nextRain != null ? `${fmtD(meteo.time[nextRain])} (${Math.round(meteo.rain[nextRain])} mm)` : 'aucune sur 10 jours' };
+  }
+  return (
+    <Sheet title={s.nom} sub={`${s.latin || ''} · ${fmtD(dayIso)}`} onClose={onClose}>
+      <button type="button" className="back" onClick={onBack}>‹ Parcelle</button>
+      <div className={`hero medal-${medal}`}>
+        <MedalMush medal={medal} size={56} />
+        <div>
+          <div className="hero-score"><b>{r.score}</b><span>/100</span></div>
+          <span className={`pill s-${r.status}`}>{STATUS_LABEL[r.status]}</span>
+          <p className="note">{MEDAL_LABEL[medal]}. Indice d'adéquation des conditions, pas une probabilité.</p>
         </div>
-      ))}
-      {others.length > 0 && <p className="note">Pas attendus sur ce type de forêt : {others.map((s) => s.nom).join(', ')}.</p>}
-      <div className="actions"><button type="button" className="btn" onClick={onNote}>Noter une sortie ici</button></div>
+      </div>
+      <section><span className="label">Pourquoi ce score</span><ul className="reasons">{r.reasons.map((t) => <li key={t}>{t}</li>)}</ul></section>
+      {ctx && (
+        <section>
+          <span className="label">Météo sur cette parcelle</span>
+          <div className="facts">
+            <div className="fact"><span className="label">Pluie 7 j</span><b>{ctx.r7.toFixed(0)} mm</b></div>
+            <div className="fact"><span className="label">Jours secs</span><b>{ctx.dry}</b></div>
+            <div className="fact"><span className="label">Min / max</span><b>{Math.round(ctx.tmin)}° / {Math.round(ctx.tmax)}°</b></div>
+            <div className="fact"><span className="label">Prochaine pluie</span><b className="small">{ctx.next}</b></div>
+          </div>
+        </section>
+      )}
+      <section>
+        <span className="label">Parcelle</span>
+        <div className="facts">
+          <div className="fact"><span className="label">Forêt</span><b className="small">{p.tfv || HABITATS[p.hab]}</b></div>
+          <div className="fact"><span className="label">Humidité locale</span><b>{Math.round((p.h || 0) * 100)} %</b>{p.wn && <span className="note">{p.wn} à {p.dw} m</span>}</div>
+        </div>
+      </section>
+      <section className="tips">
+        <span className="label">Où et comment chercher</span>
+        {s.arbres && <p>{s.arbres}</p>}
+        {s.conseils?.length > 0 && <ul>{s.conseils.map((c) => <li key={c}>{c}</li>)}</ul>}
+      </section>
+      {s.confusions && <p className="confusion"><strong>Confusions :</strong> {s.confusions}</p>}
     </Sheet>
   );
 }
