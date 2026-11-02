@@ -118,3 +118,6 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .maplibregl-ctrl-group { background: var(--surface) !important; }
 .maplibregl-ctrl-bottom-right, .maplibregl-ctrl-bottom-left { margin-bottom: calc(env(safe-area-inset-bottom, 0px) + 64px); }
 .maplibregl-ctrl-top-right { margin-top: calc(env(safe-area-inset-top, 0px) + 112px); }
+.legend button.hab { display: flex; align-items: center; gap: 7px; border: 0; background: transparent; padding: 2px 0; font-size: 12px; cursor: pointer; text-align: left; }
+.legend button.hab.off { opacity: .35; text-decoration: line-through; }
+.filter-on { position: absolute; z-index: 4; left: 50%; transform: translateX(-50%); bottom: calc(env(safe-area-inset-bottom, 0px) + 70px); }

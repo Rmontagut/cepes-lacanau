@@ -21,6 +21,7 @@ export async function POST(req) {
     date: String(b.date).slice(0, 10), espece: String(b.espece), resultat: String(b.resultat || 'rien'),
     kg: b.kg === '' || b.kg == null ? null : Number(b.kg), note: String(b.note || '').slice(0, 500),
     lat: typeof b.lat === 'number' ? b.lat : null, lon: typeof b.lon === 'number' ? b.lon : null,
+    hab: typeof b.hab === 'string' ? b.hab.slice(0, 20) : null, tfv: typeof b.tfv === 'string' ? b.tfv.slice(0, 120) : null,
     creeLe: new Date().toISOString(),
   };
   const list = (await store.get(KEY)) || [];

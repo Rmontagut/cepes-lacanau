@@ -8,8 +8,27 @@ const MIN_ZOOM_FOREST = 11.5;
 const CENTER = [-1.11, 44.99];
 const IGN = (layer, fmt) => `https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=${layer}&STYLE=normal&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=${fmt}`;
 const STATUS_COLOR = { ouverte: '#13A538', faible: '#A3CF3A', prepare: '#F2A007', fermee: '#D9472B', annulee: '#8E2F23', rien: '#8A8F86', hors: '#B7BDAF', na: '#B7BDAF' };
+const STATUS_FILL = ['match', ['get', 'st'], 'ouverte', '#13A538', 'faible', '#A3CF3A', 'prepare', '#F2A007', 'fermee', '#D9472B', 'annulee', '#8E2F23', 'rien', '#8A8F86', '#B7BDAF'];
+const HAB_FILL = ['match', ['get', 'hab'], 'pin', '#2F6B3C', 'conifere', '#6FA46A', 'chene', '#B9771A', 'chene_vert', '#7B5530', 'feuillus', '#D8B530', 'melange', '#6E7FC0', '#B4B8AE'];
 const FILL_OPACITY = ['case', ['!', ['get', 'fit']], 0, ['match', ['get', 'st'], 'ouverte', ['interpolate', ['linear'], ['get', 'sc'], 45, 0.55, 100, 0.85], 'faible', 0.5, 'prepare', 0.55, 'fermee', 0.45, 'annulee', 0.45, 0.22]];
 const FILL_OPACITY_SOFT = ['case', ['!', ['get', 'fit']], 0, ['match', ['get', 'st'], 'ouverte', 0.3, 'faible', 0.22, 'prepare', 0.2, 0.08]];
+export const HAB_COLOR = { pin: '#2F6B3C', conifere: '#6FA46A', chene: '#B9771A', chene_vert: '#7B5530', feuillus: '#D8B530', melange: '#6E7FC0', autre: '#B4B8AE' };
+function pointInGeom(pt, geom) {
+  const [x, y] = pt;
+  for (const poly of geom.coordinates) {
+    let inside = false;
+    poly.forEach((ring, ri) => {
+      let c = false;
+      for (let a = 0, b = ring.length - 1; a < ring.length; b = a++) {
+        const [xi, yi] = ring[a]; const [xj, yj] = ring[b];
+        if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) c = !c;
+      }
+      if (ri === 0) inside = c; else if (c) inside = false;
+    });
+    if (inside) return true;
+  }
+  return false;
+}
 const WEEKDAY = ['dim', 'lun', 'mar', 'mer', 'jeu', 'ven', 'sam'];
 const RES = { rien: 'Rien', quelques: 'Quelques-uns', bonne: 'Belle récolte' };
 const cellKey = (lat, lon) => `${Math.round(lat * 10) / 10},${Math.round(lon * 10) / 10}`;
@@ -74,7 +93,13 @@ export default function MapApp() {
   const [loading, setLoading] = useState(0);
   const [error, setError] = useState('');
   const [base, setBase] = useState('plan');
-  const [view, setView] = useState('champis'); // 'champis' | 'zones'
+  const [view, setView] = useState('champis'); // 'champis' | 'zones' | 'essences'
+  const [habOff, setHabOff] = useState([]); // essences masquées
+  const findForest = useCallback((pos) => {
+    if (!pos) return null;
+    for (const f of features.current.values()) if (pointInGeom([pos.lon, pos.lat], f.geometry)) return f.properties;
+    return null;
+  }, []);
   const [panel, setPanel] = useState(null); // {type:'parcelle', fid, lngLat} | {type:'carnet'} | {type:'especes'}
   const [sorties, setSorties] = useState([]);
   const [carnetOn, setCarnetOn] = useState(false);
@@ -185,7 +210,7 @@ export default function MapApp() {
         if (ip) {
           const id = e.best.s.id;
           if (!m.hasImage(`mush-${id}`)) { const [cap, stem] = colorFor(id); m.addImage(`mush-${id}`, mushroomImage(cap, stem), { pixelRatio: 2 }); }
-          ripe.push({ type: 'Feature', properties: { fid: f.properties.fid, icon: `mush-${id}`, sc }, geometry: { type: 'Point', coordinates: ip } });
+          ripe.push({ type: 'Feature', properties: { fid: f.properties.fid, hab: f.properties.hab, icon: `mush-${id}`, sc }, geometry: { type: 'Point', coordinates: ip } });
         }
       }
     }
@@ -196,8 +221,17 @@ export default function MapApp() {
   useEffect(() => {
     const m = map.current; if (!m || !m.getLayer('ripe')) return;
     m.setLayoutProperty('ripe', 'visibility', view === 'champis' ? 'visible' : 'none');
-    m.setPaintProperty('forest-fill', 'fill-opacity', view === 'champis' ? FILL_OPACITY_SOFT : FILL_OPACITY);
+    m.setPaintProperty('forest-fill', 'fill-opacity', view === 'champis' ? FILL_OPACITY_SOFT : view === 'essences' ? 0.6 : FILL_OPACITY);
+    m.setPaintProperty('forest-fill', 'fill-color', view === 'essences' ? HAB_FILL : STATUS_FILL);
+    m.setFilter('forest-line', view === 'essences' ? null : ['==', ['get', 'fit'], true]);
   }, [view, featTick]);
+
+  useEffect(() => {
+    const m = map.current; if (!m || !m.getLayer('forest-fill')) return;
+    const f = habOff.length ? ['!', ['in', ['get', 'hab'], ['literal', habOff]]] : null;
+    m.setFilter('forest-fill', f);
+    m.setFilter('ripe', f);
+  }, [habOff, featTick]);
 
   useEffect(() => {
     const m = map.current; if (!m || !m.getSource('sorties')) return;
@@ -232,7 +266,7 @@ export default function MapApp() {
             {
               id: 'forest-fill', type: 'fill', source: 'forest',
               paint: {
-                'fill-color': ['match', ['get', 'st'], 'ouverte', STATUS_COLOR.ouverte, 'faible', STATUS_COLOR.faible, 'prepare', STATUS_COLOR.prepare, 'fermee', STATUS_COLOR.fermee, 'annulee', STATUS_COLOR.annulee, 'rien', STATUS_COLOR.rien, STATUS_COLOR.na],
+                'fill-color': STATUS_FILL,
                 'fill-opacity': FILL_OPACITY_SOFT,
               },
             },
@@ -330,7 +364,17 @@ export default function MapApp() {
       </div>
 
       <div className="legend" aria-label="Légende">
-        {view === 'champis' ? (
+        {view === 'essences' ? (
+          <>
+            <span className="label">Essences · touche pour masquer</span>
+            {Object.entries(HABITATS).map(([k, v]) => (
+              <button key={k} type="button" className={`hab${habOff.includes(k) ? ' off' : ''}`} aria-pressed={!habOff.includes(k)}
+                onClick={() => setHabOff(habOff.includes(k) ? habOff.filter((x) => x !== k) : [...habOff, k])}>
+                <i style={{ background: HAB_COLOR[k] }} />{v}
+              </button>
+            ))}
+          </>
+        ) : view === 'champis' ? (
           <>
             <span className="label">Zones mûres</span>
             {species.filter((s) => sel === 'best' || s.id === sel).map((s) => (
@@ -349,10 +393,14 @@ export default function MapApp() {
         )}
       </div>
 
+      {habOff.length > 0 && view !== 'essences' && (
+        <button type="button" className="chip filter-on" onClick={() => setHabOff([])}>Filtre essences actif · tout afficher</button>
+      )}
       <div className="basemap">
         <div className="seg" role="group" aria-label="Affichage">
           <button type="button" aria-pressed={view === 'champis'} onClick={() => setView('champis')}>Champis</button>
           <button type="button" aria-pressed={view === 'zones'} onClick={() => setView('zones')}>Zones</button>
+          <button type="button" aria-pressed={view === 'essences'} onClick={() => setView('essences')}>Essences</button>
         </div>
         <button type="button" className="chip" onClick={() => setBase(base === 'plan' ? 'ortho' : 'plan')}>{base === 'plan' ? 'Photo aérienne' : 'Plan IGN'}</button>
       </div>
@@ -369,11 +417,11 @@ export default function MapApp() {
           onClose={closePanel} onNote={() => setPanel({ type: 'carnet', at: panel.lngLat })} />
       )}
       {panel?.type === 'carnet' && (
-        <Carnet sorties={sorties} species={species} enabled={carnetOn} at={panel.at} geoPos={geoPos}
+        <Carnet sorties={sorties} species={species} enabled={carnetOn} at={panel.at} geoPos={geoPos} findForest={findForest}
           onClose={closePanel} reload={loadSorties} />
       )}
       {panel?.type === 'especes' && (
-        <Especes species={species} editable={editable} onClose={closePanel} reload={loadSpecies} />
+        <Especes species={species} editable={editable} sorties={sorties} onClose={closePanel} reload={loadSpecies} />
       )}
     </div>
   );
@@ -424,7 +472,7 @@ function Parcelle({ f, evalFeature, species, dayIso, onClose, onNote }) {
   );
 }
 
-function Carnet({ sorties, species, enabled, at, geoPos, onClose, reload }) {
+function Carnet({ sorties, species, enabled, at, geoPos, findForest, onClose, reload }) {
   const [form, setForm] = useState({ date: todayParis(), espece: species[0]?.id || 'autre', resultat: 'rien', kg: '', note: '' });
   const [where, setWhere] = useState(at ? 'parcelle' : 'aucun');
   const [msg, setMsg] = useState('');
@@ -437,7 +485,7 @@ function Carnet({ sorties, species, enabled, at, geoPos, onClose, reload }) {
     if (where === 'parcelle' && at) pos = at;
     if (where === 'gps') pos = geoPos.current;
     setBusy(true);
-    const r = await fetch('/api/sorties', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...form, lat: pos?.lat ?? null, lon: pos?.lon ?? null }) });
+    const r = await fetch('/api/sorties', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...form, lat: pos?.lat ?? null, lon: pos?.lon ?? null, hab: findForest(pos)?.hab ?? null, tfv: findForest(pos)?.tfv ?? null }) });
     setBusy(false);
     if (r.ok) { setMsg('Sortie ajoutée.'); setForm({ ...form, kg: '', note: '' }); reload(); } else setMsg("Ajout impossible pour le moment.");
   }
@@ -477,7 +525,7 @@ function Carnet({ sorties, species, enabled, at, geoPos, onClose, reload }) {
         {sorties.length === 0 && <p className="note">Pas encore de sortie notée.</p>}
         {sorties.map((s) => (
           <div className="list-row" key={s.id}>
-            <div><strong>{fmtD(s.date)} · {name(s.espece)}</strong><br /><span>{RES[s.resultat] || s.resultat}{s.kg != null ? ` · ${s.kg} kg` : ''}{s.lat != null ? ' · sur la carte' : ''}</span>{s.note && <p className="note">{s.note}</p>}</div>
+            <div><strong>{fmtD(s.date)} · {name(s.espece)}</strong><br /><span>{RES[s.resultat] || s.resultat}{s.kg != null ? ` · ${s.kg} kg` : ''}{s.hab ? ` · ${HABITATS[s.hab] || s.hab}` : ''}{s.lat != null ? ' · sur la carte' : ''}</span>{s.note && <p className="note">{s.note}</p>}</div>
             <button type="button" className="btn ghost" onClick={() => del(s.id)}>{armed === s.id ? 'Confirmer' : 'Retirer'}</button>
           </div>
         ))}
@@ -493,7 +541,17 @@ const NUM_FIELDS = [
   ['gelSeuil', 'Gel qui casse (min °C)'], ['chaleurMax', 'Chaleur qui casse (max °C)'], ['secJours', 'Jours secs tolérés'],
 ];
 
-function Especes({ species, editable, onClose, reload }) {
+function Especes({ species, editable, sorties, onClose, reload }) {
+  const hints = [];
+  for (const s of species) {
+    const found = {};
+    for (const x of sorties) if (x.espece === s.id && x.resultat !== 'rien' && x.hab) found[x.hab] = (found[x.hab] || 0) + 1;
+    for (const [h, n] of Object.entries(found)) if (!(s.habitats || []).includes(h) && h !== 'autre') hints.push({ s, h, n });
+  }
+  async function addHab(s, h) {
+    await fetch('/api/species', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...s, habitats: [...(s.habitats || []), h] }) });
+    reload();
+  }
   const [edit, setEdit] = useState(null);
   const [msg, setMsg] = useState('');
   const [armed, setArmed] = useState(null);
@@ -518,6 +576,12 @@ function Especes({ species, editable, onClose, reload }) {
   return (
     <Sheet title="Espèces et seuils" sub="Valeurs de départ, à ajuster avec le carnet." onClose={onClose}>
       {!editable && <p className="banner">Les modifications seront possibles une fois la base de données branchée sur Vercel.</p>}
+      {!edit && hints.map(({ s, h, n }) => (
+        <div className="banner" key={s.id + h}>
+          Tu as trouvé des {s.nom.toLowerCase()} {n} fois en « {HABITATS[h]} », un type de forêt qui n'est pas dans ses habitats.
+          {editable && <div className="actions" style={{ marginTop: 8 }}><button type="button" className="btn" onClick={() => addHab(s, h)}>Ajouter « {HABITATS[h]} »</button></div>}
+        </div>
+      ))}
       {!edit && (
         <div>
           {species.map((s) => (
