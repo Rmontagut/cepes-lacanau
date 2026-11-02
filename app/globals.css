@@ -51,8 +51,14 @@ p { margin: 0; }
 .legend span { display: flex; align-items: center; gap: 7px; }
 .legend i { width: 14px; height: 10px; border-radius: 2px; display: inline-block; }
 
-/* Bouton fonds */
-.basemap { position: absolute; z-index: 4; right: max(12px, env(safe-area-inset-right, 0px)); bottom: calc(env(safe-area-inset-bottom, 0px) + 84px); }
+.legend .note { max-width: 150px; font-size: 11px; }
+.legend i.mush { width: 12px; height: 12px; border-radius: 6px 6px 2px 2px; }
+
+/* Bouton fonds + bascule d'affichage */
+.basemap { position: absolute; z-index: 4; right: max(12px, env(safe-area-inset-right, 0px)); bottom: calc(env(safe-area-inset-bottom, 0px) + 84px); display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+.seg { display: flex; background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 3px; box-shadow: var(--shadow); }
+.seg button { border: 0; background: transparent; border-radius: 999px; padding: 6px 12px; font-weight: 600; font-size: 13px; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
 
 /* Barre du bas */
 .dock { position: absolute; z-index: 6; left: 0; right: 0; bottom: 0; padding: 0 max(12px, env(safe-area-inset-right, 0px)) calc(env(safe-area-inset-bottom, 0px) + 12px) max(12px, env(safe-area-inset-left, 0px)); display: flex; justify-content: center; gap: 8px; pointer-events: none; }

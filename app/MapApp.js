@@ -7,10 +7,54 @@ const TILE = 0.03;
 const MIN_ZOOM_FOREST = 11.5;
 const CENTER = [-1.11, 44.99];
 const IGN = (layer, fmt) => `https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=${layer}&STYLE=normal&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=${fmt}`;
-const STATUS_COLOR = { ouverte: '#2F9A44', faible: '#9CC46A', prepare: '#E2A43A', fermee: '#C2553F', annulee: '#8E2F23', rien: '#9AA390', hors: '#B7BDAF', na: '#B7BDAF' };
+const STATUS_COLOR = { ouverte: '#13A538', faible: '#A3CF3A', prepare: '#F2A007', fermee: '#D9472B', annulee: '#8E2F23', rien: '#8A8F86', hors: '#B7BDAF', na: '#B7BDAF' };
+const FILL_OPACITY = ['case', ['!', ['get', 'fit']], 0, ['match', ['get', 'st'], 'ouverte', ['interpolate', ['linear'], ['get', 'sc'], 45, 0.55, 100, 0.85], 'faible', 0.5, 'prepare', 0.55, 'fermee', 0.45, 'annulee', 0.45, 0.22]];
+const FILL_OPACITY_SOFT = ['case', ['!', ['get', 'fit']], 0, ['match', ['get', 'st'], 'ouverte', 0.3, 'faible', 0.22, 'prepare', 0.2, 0.08]];
 const WEEKDAY = ['dim', 'lun', 'mar', 'mer', 'jeu', 'ven', 'sam'];
 const RES = { rien: 'Rien', quelques: 'Quelques-uns', bonne: 'Belle récolte' };
 const cellKey = (lat, lon) => `${Math.round(lat * 10) / 10},${Math.round(lon * 10) / 10}`;
+const SPECIES_COLOR = { cepes: ['#7A4A24', '#F2E6D2'], girolle: ['#E8A317', '#F6D27A'], 'chanterelle-tube': ['#5E5444', '#E2C54B'], 'lactaire-delicieux': ['#E2662A', '#F4B07E'] };
+function colorFor(id) {
+  if (SPECIES_COLOR[id]) return SPECIES_COLOR[id];
+  let h = 0; for (const c of id) h = (h * 31 + c.charCodeAt(0)) % 360;
+  return [`hsl(${h} 55% 38%)`, `hsl(${h} 50% 85%)`];
+}
+
+// Icône champignon dessinée en canvas (chapeau + pied), contour clair pour se lire sur tous les fonds
+function mushroomImage(cap, stem) {
+  const S = 64; const c = document.createElement('canvas'); c.width = S; c.height = S;
+  const g = c.getContext('2d');
+  g.lineJoin = 'round'; g.lineWidth = 5; g.strokeStyle = '#FFFFFF';
+  const drawStem = () => { g.beginPath(); g.moveTo(25, 34); g.quadraticCurveTo(22, 54, 26, 58); g.lineTo(38, 58); g.quadraticCurveTo(42, 54, 39, 34); g.closePath(); };
+  const drawCap = () => { g.beginPath(); g.moveTo(8, 36); g.bezierCurveTo(8, 10, 56, 10, 56, 36); g.quadraticCurveTo(32, 42, 8, 36); g.closePath(); };
+  drawStem(); g.stroke(); drawCap(); g.stroke();
+  drawStem(); g.fillStyle = stem; g.fill();
+  drawCap(); g.fillStyle = cap; g.fill();
+  g.beginPath(); g.ellipse(24, 22, 5, 3, -0.4, 0, Math.PI * 2); g.fillStyle = 'rgba(255,255,255,.35)'; g.fill();
+  return g.getImageData(0, 0, S, S);
+}
+
+// Point intérieur d'un polygone : milieu du plus long segment horizontal au niveau du centroïde
+function interiorPoint(geom) {
+  let best = null; let bestA = -1;
+  for (const poly of geom.coordinates) {
+    const ring = poly[0]; let a = 0;
+    for (let k = 0; k < ring.length - 1; k++) a += ring[k][0] * ring[k + 1][1] - ring[k + 1][0] * ring[k][1];
+    if (Math.abs(a) > bestA) { bestA = Math.abs(a); best = poly; }
+  }
+  if (!best) return null;
+  const ring = best[0];
+  let y = 0; for (const p of ring) y += p[1]; y /= ring.length;
+  const xs = [];
+  for (const r of best) for (let k = 0; k < r.length - 1; k++) {
+    const [x1, y1] = r[k]; const [x2, y2] = r[k + 1];
+    if ((y1 <= y && y2 > y) || (y2 <= y && y1 > y)) xs.push(x1 + ((y - y1) / (y2 - y1)) * (x2 - x1));
+  }
+  xs.sort((a, b) => a - b);
+  let mx = null; let w = -1;
+  for (let k = 0; k + 1 < xs.length; k += 2) if (xs[k + 1] - xs[k] > w) { w = xs[k + 1] - xs[k]; mx = (xs[k] + xs[k + 1]) / 2; }
+  return mx == null ? ring[0] : [mx, y];
+}
 
 export default function MapApp() {
   const mapEl = useRef(null);
@@ -30,6 +74,7 @@ export default function MapApp() {
   const [loading, setLoading] = useState(0);
   const [error, setError] = useState('');
   const [base, setBase] = useState('plan');
+  const [view, setView] = useState('champis'); // 'champis' | 'zones'
   const [panel, setPanel] = useState(null); // {type:'parcelle', fid, lngLat} | {type:'carnet'} | {type:'especes'}
   const [sorties, setSorties] = useState([]);
   const [carnetOn, setCarnetOn] = useState(false);
@@ -128,14 +173,31 @@ export default function MapApp() {
   useEffect(() => {
     const m = map.current; if (!m || !m.isStyleLoaded() || !m.getSource('forest')) return;
     const out = [];
+    const ripe = [];
     for (const f of features.current.values()) {
       const e = evalFeature(f);
       const st = !e ? 'na' : e.best ? e.best.r.status : 'na';
       const sc = e && e.best ? e.best.r.score : 0;
       out.push({ ...f, properties: { ...f.properties, st, sc, fit: !!(e && e.best) } });
+      if (e && e.best && e.best.r.status === 'ouverte') {
+        if (!f.properties._ip) f.properties._ip = interiorPoint(f.geometry);
+        const ip = f.properties._ip;
+        if (ip) {
+          const id = e.best.s.id;
+          if (!m.hasImage(`mush-${id}`)) { const [cap, stem] = colorFor(id); m.addImage(`mush-${id}`, mushroomImage(cap, stem), { pixelRatio: 2 }); }
+          ripe.push({ type: 'Feature', properties: { fid: f.properties.fid, icon: `mush-${id}`, sc }, geometry: { type: 'Point', coordinates: ip } });
+        }
+      }
     }
     m.getSource('forest').setData({ type: 'FeatureCollection', features: out });
+    m.getSource('ripe').setData({ type: 'FeatureCollection', features: ripe });
   }, [featTick, meteoTick, evalFeature]);
+
+  useEffect(() => {
+    const m = map.current; if (!m || !m.getLayer('ripe')) return;
+    m.setLayoutProperty('ripe', 'visibility', view === 'champis' ? 'visible' : 'none');
+    m.setPaintProperty('forest-fill', 'fill-opacity', view === 'champis' ? FILL_OPACITY_SOFT : FILL_OPACITY);
+  }, [view, featTick]);
 
   useEffect(() => {
     const m = map.current; if (!m || !m.getSource('sorties')) return;
@@ -161,19 +223,31 @@ export default function MapApp() {
             forest: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
             sorties: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
             selected: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
+            ripe: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
           },
           layers: [
-            { id: 'plan', type: 'raster', source: 'plan' },
-            { id: 'ortho', type: 'raster', source: 'ortho', layout: { visibility: 'none' } },
+            // Plan IGN grisé : ses forêts vertes ne doivent pas concurrencer l'indice
+            { id: 'plan', type: 'raster', source: 'plan', paint: { 'raster-saturation': -0.9, 'raster-contrast': -0.05, 'raster-brightness-min': 0.08 } },
+            { id: 'ortho', type: 'raster', source: 'ortho', layout: { visibility: 'none' }, paint: { 'raster-saturation': -0.6 } },
             {
               id: 'forest-fill', type: 'fill', source: 'forest',
               paint: {
                 'fill-color': ['match', ['get', 'st'], 'ouverte', STATUS_COLOR.ouverte, 'faible', STATUS_COLOR.faible, 'prepare', STATUS_COLOR.prepare, 'fermee', STATUS_COLOR.fermee, 'annulee', STATUS_COLOR.annulee, 'rien', STATUS_COLOR.rien, STATUS_COLOR.na],
-                'fill-opacity': ['case', ['!', ['get', 'fit']], 0.08, ['match', ['get', 'st'], 'ouverte', ['interpolate', ['linear'], ['get', 'sc'], 45, 0.4, 100, 0.72], 'faible', 0.38, 'prepare', 0.42, 'fermee', 0.35, 'annulee', 0.35, 0.18]],
+                'fill-opacity': FILL_OPACITY_SOFT,
               },
             },
-            { id: 'forest-line', type: 'line', source: 'forest', paint: { 'line-color': '#2B3A26', 'line-opacity': 0.35, 'line-width': ['interpolate', ['linear'], ['zoom'], 11, 0.3, 16, 1] } },
+            { id: 'forest-line', type: 'line', source: 'forest', filter: ['==', ['get', 'fit'], true], paint: { 'line-color': '#2B3A26', 'line-opacity': 0.3, 'line-width': ['interpolate', ['linear'], ['zoom'], 11, 0.3, 16, 1] } },
             { id: 'selected-line', type: 'line', source: 'selected', paint: { 'line-color': '#1F2A1C', 'line-width': 3 } },
+            {
+              id: 'ripe', type: 'symbol', source: 'ripe',
+              layout: {
+                'icon-image': ['get', 'icon'],
+                'icon-size': ['interpolate', ['linear'], ['get', 'sc'], 45, 0.55, 100, 0.95],
+                'icon-allow-overlap': ['step', ['zoom'], false, 14, true],
+                'icon-anchor': 'bottom',
+                'symbol-sort-key': ['-', 100, ['get', 'sc']],
+              },
+            },
             { id: 'sorties', type: 'circle', source: 'sorties', paint: { 'circle-radius': 6, 'circle-stroke-width': 2, 'circle-stroke-color': '#fff', 'circle-color': ['match', ['get', 'r'], 'bonne', '#B9771A', 'quelques', '#E2A43A', '#6E7867'] } },
           ],
         },
@@ -192,6 +266,15 @@ export default function MapApp() {
         m.getSource('selected').setData(full ? { type: 'FeatureCollection', features: [full] } : { type: 'FeatureCollection', features: [] });
         setPanel({ type: 'parcelle', fid: f.properties.fid, lngLat: { lat: e.lngLat.lat, lon: e.lngLat.lng } });
       });
+      m.on('click', 'ripe', (e) => {
+        const f = e.features && e.features[0]; if (!f) return;
+        e.originalEvent.stopPropagation();
+        const full = features.current.get(f.properties.fid);
+        m.getSource('selected').setData(full ? { type: 'FeatureCollection', features: [full] } : { type: 'FeatureCollection', features: [] });
+        setPanel({ type: 'parcelle', fid: f.properties.fid, lngLat: { lat: e.lngLat.lat, lon: e.lngLat.lng } });
+      });
+      m.on('mouseenter', 'ripe', () => { m.getCanvas().style.cursor = 'pointer'; });
+      m.on('mouseleave', 'ripe', () => { m.getCanvas().style.cursor = ''; });
       m.on('mouseenter', 'forest-fill', () => { m.getCanvas().style.cursor = 'pointer'; });
       m.on('mouseleave', 'forest-fill', () => { m.getCanvas().style.cursor = ''; });
     })();
@@ -247,14 +330,30 @@ export default function MapApp() {
       </div>
 
       <div className="legend" aria-label="Légende">
-        <span><i style={{ background: STATUS_COLOR.ouverte }} />Fenêtre ouverte</span>
-        <span><i style={{ background: STATUS_COLOR.faible }} />Ouverte, faible</span>
-        <span><i style={{ background: STATUS_COLOR.prepare }} />Ça se prépare</span>
-        <span><i style={{ background: STATUS_COLOR.fermee }} />Se ferme / cassée</span>
-        <span><i style={{ background: STATUS_COLOR.rien }} />Rien en vue</span>
+        {view === 'champis' ? (
+          <>
+            <span className="label">Zones mûres</span>
+            {species.filter((s) => sel === 'best' || s.id === sel).map((s) => (
+              <span key={s.id}><i className="mush" style={{ background: colorFor(s.id)[0] }} />{s.nom}</span>
+            ))}
+            <span className="note">Plus l'icône est grande, plus le score est haut.</span>
+          </>
+        ) : (
+          <>
+            <span><i style={{ background: STATUS_COLOR.ouverte }} />Fenêtre ouverte</span>
+            <span><i style={{ background: STATUS_COLOR.faible }} />Ouverte, faible</span>
+            <span><i style={{ background: STATUS_COLOR.prepare }} />Ça se prépare</span>
+            <span><i style={{ background: STATUS_COLOR.fermee }} />Se ferme / cassée</span>
+            <span><i style={{ background: STATUS_COLOR.rien }} />Rien en vue</span>
+          </>
+        )}
       </div>
 
       <div className="basemap">
+        <div className="seg" role="group" aria-label="Affichage">
+          <button type="button" aria-pressed={view === 'champis'} onClick={() => setView('champis')}>Champis</button>
+          <button type="button" aria-pressed={view === 'zones'} onClick={() => setView('zones')}>Zones</button>
+        </div>
         <button type="button" className="chip" onClick={() => setBase(base === 'plan' ? 'ortho' : 'plan')}>{base === 'plan' ? 'Photo aérienne' : 'Plan IGN'}</button>
       </div>
 

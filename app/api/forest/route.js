@@ -94,14 +94,29 @@ export async function GET(req) {
     ]);
 
     const coslat = Math.cos(((lat0 + TILE / 2) * Math.PI) / 180);
-    const waterPts = [];
+    // Index spatial des points d'eau (cellules de 0,005° ≈ 400 m)
+    const CELL = 0.005;
+    const grid = new Map();
     for (const w of water) {
       const nat = w.properties?.nature;
       let weight = WATER_WEIGHT[nat];
       if (!weight || !w.geometry) continue;
       if (w.properties?.persistance === 'Intermittent') weight *= 0.8;
-      for (const p of samplePoints(w.geometry, 120)) waterPts.push([p[0], p[1], weight, nat]);
+      for (const p of samplePoints(w.geometry, 150)) {
+        const k = `${Math.floor(p[0] / CELL)}:${Math.floor(p[1] / CELL)}`;
+        if (!grid.has(k)) grid.set(k, []);
+        grid.get(k).push([p[0], p[1], weight, nat]);
+      }
     }
+    const R = 4; // ±4 cellules ≈ 1,6 km
+    const near = (q) => {
+      const cx = Math.floor(q[0] / CELL); const cy = Math.floor(q[1] / CELL);
+      const out = [];
+      for (let dx = -R; dx <= R; dx++) for (let dy = -R; dy <= R; dy++) {
+        const a = grid.get(`${cx + dx}:${cy + dy}`); if (a) out.push(...a);
+      }
+      return out;
+    };
 
     const features = [];
     for (const f of forest) {
@@ -110,9 +125,9 @@ export async function GET(req) {
       if (!geometry) continue;
       const p = f.properties || {};
       let best = 0; let bestDist = null; let bestNat = null;
-      if (waterPts.length) {
-        for (const q of samplePoints(f.geometry, 60)) {
-          for (const w of waterPts) {
+      if (grid.size) {
+        for (const q of samplePoints(f.geometry, 40)) {
+          for (const w of near(q)) {
             const dx = (q[0] - w[0]) * coslat * 111320; const dy = (q[1] - w[1]) * 110540;
             const d = Math.sqrt(dx * dx + dy * dy);
             // 0–150 m : plein effet ; s'annule vers 1,5 km
