@@ -121,3 +121,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .legend button.hab { display: flex; align-items: center; gap: 7px; border: 0; background: transparent; padding: 2px 0; font-size: 12px; cursor: pointer; text-align: left; }
 .legend button.hab.off { opacity: .35; text-decoration: line-through; }
 .filter-on { position: absolute; z-index: 4; left: 50%; transform: translateX(-50%); bottom: calc(env(safe-area-inset-bottom, 0px) + 70px); }
+.day { position: relative; }
+.day .pot { display: block; width: 100%; height: 4px; border-radius: 2px; background: var(--idle-soft); overflow: hidden; margin-top: 2px; }
+.day .pot i { display: block; height: 100%; background: linear-gradient(90deg, #F2A007, #13A538); border-radius: 2px; }
+.day.best { border-color: #E2A43A; box-shadow: 0 0 0 2px #E2A43A, var(--shadow); }
+.day .star { position: absolute; top: -7px; right: -4px; font-size: 13px; color: #E2A43A; text-shadow: 0 0 2px var(--surface); }
+.topbar .row { padding-top: 8px; }

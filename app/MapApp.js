@@ -31,7 +31,10 @@ function pointInGeom(pt, geom) {
 }
 const WEEKDAY = ['dim', 'lun', 'mar', 'mer', 'jeu', 'ven', 'sam'];
 const RES = { rien: 'Rien', quelques: 'Quelques-uns', bonne: 'Belle récolte' };
-const cellKey = (lat, lon) => `${Math.round(lat * 10) / 10},${Math.round(lon * 10) / 10}`;
+// Météo par tuile (~2,5 × 3,3 km), au centre de la tuile
+const cellKey = (lat, lon) => `${lat.toFixed(3)},${lon.toFixed(3)}`;
+const tileCenterKey = (lat, lon) => cellKey((Math.floor(lat / 0.03) + 0.5) * 0.03, (Math.floor(lon / 0.03) + 0.5) * 0.03);
+const tierOf = (sc) => (sc >= 85 ? 3 : sc >= 65 ? 2 : 1);
 const SPECIES_COLOR = { cepes: ['#7A4A24', '#F2E6D2'], girolle: ['#E8A317', '#F6D27A'], 'chanterelle-tube': ['#5E5444', '#E2C54B'], 'lactaire-delicieux': ['#E2662A', '#F4B07E'] };
 function colorFor(id) {
   if (SPECIES_COLOR[id]) return SPECIES_COLOR[id];
@@ -40,8 +43,8 @@ function colorFor(id) {
 }
 
 // Icône champignon dessinée en canvas (chapeau + pied), contour clair pour se lire sur tous les fonds
-function mushroomImage(cap, stem) {
-  const S = 64; const c = document.createElement('canvas'); c.width = S; c.height = S;
+function mushroomImage(cap, stem, tier = 1) {
+  const S = 64; const W = tier >= 2 ? 92 : 64; const c = document.createElement('canvas'); c.width = W; c.height = S;
   const g = c.getContext('2d');
   g.lineJoin = 'round'; g.lineWidth = 5; g.strokeStyle = '#FFFFFF';
   const drawStem = () => { g.beginPath(); g.moveTo(25, 34); g.quadraticCurveTo(22, 54, 26, 58); g.lineTo(38, 58); g.quadraticCurveTo(42, 54, 39, 34); g.closePath(); };
@@ -50,7 +53,14 @@ function mushroomImage(cap, stem) {
   drawStem(); g.fillStyle = stem; g.fill();
   drawCap(); g.fillStyle = cap; g.fill();
   g.beginPath(); g.ellipse(24, 22, 5, 3, -0.4, 0, Math.PI * 2); g.fillStyle = 'rgba(255,255,255,.35)'; g.fill();
-  return g.getImageData(0, 0, S, S);
+  if (tier >= 2) {
+    const label = tier === 3 ? '++' : '+';
+    g.beginPath(); g.roundRect(54, 2, tier === 3 ? 36 : 26, 24, 12); g.fillStyle = tier === 3 ? '#13A538' : '#1F2A1C'; g.fill();
+    g.lineWidth = 3; g.strokeStyle = '#FFFFFF'; g.stroke();
+    g.fillStyle = '#FFFFFF'; g.font = 'bold 20px system-ui, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(label, tier === 3 ? 72 : 67, 15);
+  }
+  return g.getImageData(0, 0, W, S);
 }
 
 // Point intérieur d'un polygone : milieu du plus long segment horizontal au niveau du centroïde
@@ -82,6 +92,7 @@ export default function MapApp() {
   const tilesLoaded = useRef(new Set());
   const meteoRef = useRef(new Map()); // cellKey -> meteo | 'loading'
   const geoPos = useRef(null);
+  const centerKey = useRef(null);
 
   const [species, setSpecies] = useState([]);
   const [editable, setEditable] = useState(false);
@@ -156,7 +167,9 @@ export default function MapApp() {
     const z = m.getZoom();
     setZoomOk(z >= MIN_ZOOM_FOREST);
     const c = m.getCenter();
-    ensureMeteo(cellKey(c.lat, c.lng));
+    const ck0 = tileCenterKey(c.lat, c.lng);
+    centerKey.current = ck0;
+    ensureMeteo(ck0);
     if (z < MIN_ZOOM_FOREST) return;
     const b = m.getBounds();
     const x0 = Math.floor(b.getWest() / TILE); const x1 = Math.floor(b.getEast() / TILE);
@@ -170,6 +183,8 @@ export default function MapApp() {
 
   /* ---------- Météo de référence (centre) ---------- */
   const refMeteo = useMemo(() => {
+    const c = meteoRef.current.get(centerKey.current);
+    if (c && c !== 'loading') return c;
     for (const v of meteoRef.current.values()) if (v && v !== 'loading') return v;
     return null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -182,10 +197,10 @@ export default function MapApp() {
   }, [refMeteo, offset, todayIso]);
 
   /* ---------- Calcul des scores ---------- */
-  const evalFeature = useCallback((f, onlySel = true) => {
+  const evalFeatureOn = useCallback((f, iso, onlySel = true) => {
     const M = meteoRef.current.get(f.properties.ck);
     if (!M || M === 'loading') return null;
-    const i = dayIndex(M, dayIso);
+    const i = dayIndex(M, iso);
     const h = f.properties.h || 0;
     const list = species.filter((s) => (s.habitats || []).includes(f.properties.hab));
     const pick = onlySel && sel !== 'best' ? list.filter((s) => s.id === sel) : list;
@@ -193,7 +208,35 @@ export default function MapApp() {
     const all = pick.map((s) => ({ s, r: evalSpecies(s, M, i, h) }));
     const best = all.reduce((a, b) => (b.r.score > a.r.score ? b : a), all[0]);
     return { best, all };
-  }, [species, sel, dayIso]);
+  }, [species, sel]);
+  const evalFeature = useCallback((f, onlySel = true) => evalFeatureOn(f, dayIso, onlySel), [evalFeatureOn, dayIso]);
+
+  // Potentiel de chaque jour sur la zone chargée : score atteint par les 10 % meilleures parcelles
+  const dayPotential = useMemo(() => {
+    if (!refMeteo) return {};
+    const i0 = dayIndex(refMeteo, todayIso);
+    const feats = [...features.current.values()];
+    const step = Math.max(1, Math.floor(feats.length / 1500));
+    const out = {};
+    for (let o = -7; o <= 9; o++) {
+      const i = i0 + o; if (i < 0 || i >= refMeteo.time.length) continue;
+      const iso = refMeteo.time[i];
+      const scores = [];
+      for (let k = 0; k < feats.length; k += step) {
+        const e = evalFeatureOn(feats[k], iso);
+        if (e && e.best) scores.push(e.best.r.status === 'ouverte' || e.best.r.status === 'faible' ? e.best.r.score : 0);
+      }
+      scores.sort((a, b) => b - a);
+      out[o] = scores.length ? scores[Math.floor(scores.length * 0.1)] : 0;
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refMeteo, featTick, meteoTick, evalFeatureOn, todayIso]);
+  const bestDay = useMemo(() => {
+    let b = null; let v = 44;
+    for (const [o, sc] of Object.entries(dayPotential)) if (Number(o) >= 0 && sc > v) { v = sc; b = Number(o); }
+    return b;
+  }, [dayPotential]);
 
   useEffect(() => {
     const m = map.current; if (!m || !m.isStyleLoaded() || !m.getSource('forest')) return;
@@ -209,8 +252,10 @@ export default function MapApp() {
         const ip = f.properties._ip;
         if (ip) {
           const id = e.best.s.id;
-          if (!m.hasImage(`mush-${id}`)) { const [cap, stem] = colorFor(id); m.addImage(`mush-${id}`, mushroomImage(cap, stem), { pixelRatio: 2 }); }
-          ripe.push({ type: 'Feature', properties: { fid: f.properties.fid, hab: f.properties.hab, icon: `mush-${id}`, sc }, geometry: { type: 'Point', coordinates: ip } });
+          const tier = tierOf(sc);
+          const img = `mush-${id}-${tier}`;
+          if (!m.hasImage(img)) { const [cap, stem] = colorFor(id); m.addImage(img, mushroomImage(cap, stem, tier), { pixelRatio: 2 }); }
+          ripe.push({ type: 'Feature', properties: { fid: f.properties.fid, hab: f.properties.hab, icon: img, sc, tier }, geometry: { type: 'Point', coordinates: ip } });
         }
       }
     }
@@ -220,7 +265,7 @@ export default function MapApp() {
 
   useEffect(() => {
     const m = map.current; if (!m || !m.getLayer('ripe')) return;
-    m.setLayoutProperty('ripe', 'visibility', view === 'champis' ? 'visible' : 'none');
+    ['ripe', 'ripe-heat', 'ripe-glow'].forEach((l) => m.setLayoutProperty(l, 'visibility', view === 'champis' ? 'visible' : 'none'));
     m.setPaintProperty('forest-fill', 'fill-opacity', view === 'champis' ? FILL_OPACITY_SOFT : view === 'essences' ? 0.6 : FILL_OPACITY);
     m.setPaintProperty('forest-fill', 'fill-color', view === 'essences' ? HAB_FILL : STATUS_FILL);
     m.setFilter('forest-line', view === 'essences' ? null : ['==', ['get', 'fit'], true]);
@@ -231,6 +276,8 @@ export default function MapApp() {
     const f = habOff.length ? ['!', ['in', ['get', 'hab'], ['literal', habOff]]] : null;
     m.setFilter('forest-fill', f);
     m.setFilter('ripe', f);
+    m.setFilter('ripe-heat', f);
+    m.setFilter('ripe-glow', f ? ['all', f, ['==', ['get', 'tier'], 3]] : ['==', ['get', 'tier'], 3]);
   }, [habOff, featTick]);
 
   useEffect(() => {
@@ -273,13 +320,32 @@ export default function MapApp() {
             { id: 'forest-line', type: 'line', source: 'forest', filter: ['==', ['get', 'fit'], true], paint: { 'line-color': '#2B3A26', 'line-opacity': 0.3, 'line-width': ['interpolate', ['linear'], ['zoom'], 11, 0.3, 16, 1] } },
             { id: 'selected-line', type: 'line', source: 'selected', paint: { 'line-color': '#1F2A1C', 'line-width': 3 } },
             {
+              // Nappe de probabilité : se lit de loin, s'efface en zoomant au profit des icônes
+              id: 'ripe-heat', type: 'heatmap', source: 'ripe', maxzoom: 15,
+              paint: {
+                'heatmap-weight': ['interpolate', ['linear'], ['get', 'sc'], 45, 0.15, 85, 0.7, 100, 1],
+                'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 9, 0.6, 14, 1.2],
+                'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 9, 10, 12, 26, 15, 40],
+                'heatmap-color': ['interpolate', ['linear'], ['heatmap-density'], 0, 'rgba(242,160,7,0)', 0.25, 'rgba(242,160,7,0.25)', 0.55, 'rgba(232,110,20,0.45)', 0.85, 'rgba(200,50,20,0.6)', 1, 'rgba(150,20,10,0.7)'],
+                'heatmap-opacity': ['interpolate', ['linear'], ['zoom'], 12, 0.9, 15, 0.15],
+              },
+            },
+            {
+              id: 'ripe-glow', type: 'circle', source: 'ripe', filter: ['==', ['get', 'tier'], 3],
+              paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 11, 10, 16, 22], 'circle-color': '#FFD23F', 'circle-opacity': 0.45, 'circle-blur': 0.8, 'circle-translate': [0, -9] },
+            },
+            {
               id: 'ripe', type: 'symbol', source: 'ripe',
               layout: {
                 'icon-image': ['get', 'icon'],
-                'icon-size': ['interpolate', ['linear'], ['get', 'sc'], 45, 0.55, 100, 0.95],
+                'icon-size': ['match', ['get', 'tier'], 3, 1.05, 2, 0.8, 0.55],
                 'icon-allow-overlap': ['step', ['zoom'], false, 14, true],
                 'icon-anchor': 'bottom',
+                'icon-offset': ['match', ['get', 'tier'], 1, ['literal', [0, 0]], ['literal', [7, 0]]],
                 'symbol-sort-key': ['-', 100, ['get', 'sc']],
+              },
+              paint: {
+                'icon-opacity': ['match', ['get', 'tier'], 3, 1, 2, 0.95, 0.7],
               },
             },
             { id: 'sorties', type: 'circle', source: 'sorties', paint: { 'circle-radius': 6, 'circle-stroke-width': 2, 'circle-stroke-color': '#fff', 'circle-color': ['match', ['get', 'r'], 'bonne', '#B9771A', 'quelques', '#E2A43A', '#6E7867'] } },
@@ -352,8 +418,11 @@ export default function MapApp() {
         {days.length > 0 && (
           <div className="row" role="group" aria-label="Jour">
             {days.map((d) => (
-              <button key={d.iso} type="button" className={`day${d.o > 0 ? ' fc' : ''}`} aria-pressed={offset === d.o} onClick={() => setOffset(d.o)} title={fmtD(d.iso)}>
+              <button key={d.iso} type="button" className={`day${d.o > 0 ? ' fc' : ''}${bestDay === d.o ? ' best' : ''}`} aria-pressed={offset === d.o} onClick={() => setOffset(d.o)}
+                title={`${fmtD(d.iso)} · potentiel ${dayPotential[d.o] ?? 0}${bestDay === d.o ? ' · meilleur jour à venir' : ''}`}>
+                {bestDay === d.o && <span className="star" aria-label="Meilleur jour pour récolter">★</span>}
                 <small>{d.wd}</small><b>{d.n}</b><span className="rain">{d.rain >= 0.5 ? `${Math.round(d.rain)} mm` : ' '}</span>
+                <span className="pot" aria-hidden="true"><i style={{ width: `${Math.max(0, Math.min(100, dayPotential[d.o] ?? 0))}%` }} /></span>
               </button>
             ))}
           </div>
@@ -380,7 +449,8 @@ export default function MapApp() {
             {species.filter((s) => sel === 'best' || s.id === sel).map((s) => (
               <span key={s.id}><i className="mush" style={{ background: colorFor(s.id)[0] }} />{s.nom}</span>
             ))}
-            <span className="note">Plus l'icône est grande, plus le score est haut.</span>
+            <span className="note"><b>+</b> bonnes chances · <b>++</b> tout est réuni ce jour-là. La nappe orange montre où ça se concentre.</span>
+            {bestDay != null && <span className="note">★ sur la barre des jours : meilleur jour à venir.</span>}
           </>
         ) : (
           <>
