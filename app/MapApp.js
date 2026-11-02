@@ -97,7 +97,8 @@ export default function MapApp() {
 
   const [species, setSpecies] = useState([]);
   const [editable, setEditable] = useState(false);
-  const [sel, setSel] = useState('best');
+  const [spOff, setSpOff] = useState([]); // espèces masquées
+  const [drawer, setDrawer] = useState(false);
   const [offset, setOffset] = useState(0);
   const [meteoTick, setMeteoTick] = useState(0);
   const [featTick, setFeatTick] = useState(0);
@@ -204,12 +205,12 @@ export default function MapApp() {
     const i = dayIndex(M, iso);
     const h = f.properties.h || 0;
     const list = species.filter((s) => (s.habitats || []).includes(f.properties.hab));
-    const pick = onlySel && sel !== 'best' ? list.filter((s) => s.id === sel) : list;
+    const pick = onlySel ? list.filter((s) => !spOff.includes(s.id)) : list;
     if (!pick.length) return { best: null, all: [] };
     const all = pick.map((s) => ({ s, r: evalSpecies(s, M, i, h) }));
     const best = all.reduce((a, b) => (b.r.score > a.r.score ? b : a), all[0]);
     return { best, all };
-  }, [species, sel]);
+  }, [species, spOff]);
   const evalFeature = useCallback((f, onlySel = true) => evalFeatureOn(f, dayIso, onlySel), [evalFeatureOn, dayIso]);
 
   // Potentiel de chaque jour sur la zone chargée : score atteint par les 10 % meilleures parcelles
@@ -410,12 +411,6 @@ export default function MapApp() {
       <div id="map" ref={mapEl} />
 
       <div className="topbar">
-        <div className="row" role="group" aria-label="Espèce">
-          <button type="button" className="chip" aria-pressed={sel === 'best'} onClick={() => setSel('best')}>Toutes</button>
-          {species.slice().sort((a, b) => (a.ordre ?? 99) - (b.ordre ?? 99)).map((s) => (
-            <button key={s.id} type="button" className="chip" aria-pressed={sel === s.id} onClick={() => setSel(s.id)}>{s.nom}</button>
-          ))}
-        </div>
         {days.length > 0 && (
           <div className="row" role="group" aria-label="Jour">
             {days.map((d) => (
@@ -433,53 +428,60 @@ export default function MapApp() {
         {error && <div className="hint" role="status" onClick={() => setError('')}>{error}</div>}
       </div>
 
-      <div className="legend" aria-label="Légende">
-        {view === 'essences' ? (
-          <>
-            <span className="label">Essences · touche pour masquer</span>
-            {Object.entries(HABITATS).map(([k, v]) => (
-              <button key={k} type="button" className={`hab${habOff.includes(k) ? ' off' : ''}`} aria-pressed={!habOff.includes(k)}
-                onClick={() => setHabOff(habOff.includes(k) ? habOff.filter((x) => x !== k) : [...habOff, k])}>
-                <i style={{ background: HAB_COLOR[k] }} />{v}
-              </button>
-            ))}
-          </>
-        ) : view === 'champis' ? (
-          <>
-            <span className="label">Zones mûres</span>
-            {species.filter((s) => sel === 'best' || s.id === sel).map((s) => (
-              <span key={s.id}><i className="mush" style={{ background: colorFor(s.id)[0] }} />{s.nom}</span>
-            ))}
-            <span className="note"><b>+</b> bonnes chances · <b>++</b> tout est réuni ce jour-là. La nappe orange montre où ça se concentre.</span>
-            {bestDay != null && <span className="note">★ sur la barre des jours : meilleur jour à venir.</span>}
-          </>
-        ) : (
-          <>
-            <span><i style={{ background: STATUS_COLOR.ouverte }} />Fenêtre ouverte</span>
-            <span><i style={{ background: STATUS_COLOR.faible }} />Ouverte, faible</span>
-            <span><i style={{ background: STATUS_COLOR.prepare }} />Ça se prépare</span>
-            <span><i style={{ background: STATUS_COLOR.fermee }} />Se ferme / cassée</span>
-            <span><i style={{ background: STATUS_COLOR.rien }} />Rien en vue</span>
-          </>
-        )}
-      </div>
-
-      {habOff.length > 0 && view !== 'essences' && (
-        <button type="button" className="chip filter-on" onClick={() => setHabOff([])}>Filtre essences actif · tout afficher</button>
-      )}
-      <div className="basemap">
-        <div className="seg" role="group" aria-label="Affichage">
-          <button type="button" aria-pressed={view === 'champis'} onClick={() => setView('champis')}>Champis</button>
-          <button type="button" aria-pressed={view === 'zones'} onClick={() => setView('zones')}>Zones</button>
-          <button type="button" aria-pressed={view === 'essences'} onClick={() => setView('essences')}>Essences</button>
-        </div>
-        <button type="button" className="chip" onClick={() => setBase(base === 'plan' ? 'ortho' : 'plan')}>{base === 'plan' ? 'Photo aérienne' : 'Plan IGN'}</button>
-      </div>
+      <button type="button" className="basebtn" onClick={() => setBase(base === 'plan' ? 'ortho' : 'plan')}>{base === 'plan' ? 'Photo' : 'Plan'}</button>
 
       {!panel && (
-        <div className="dock">
-          <button type="button" className="chip" onClick={() => setPanel({ type: 'carnet' })}>Carnet</button>
-          <button type="button" className="chip" onClick={() => setPanel({ type: 'especes' })}>Espèces et seuils</button>
+        <div className="dock2">
+          {drawer && (
+            <div className="drawer" role="region" aria-label={`Réglages ${view}`}>
+              {(view === 'champis' || view === 'zones') && (
+                <>
+                  <span className="label">Espèces affichées</span>
+                  {species.map((s) => (
+                    <label key={s.id} className="check">
+                      <input type="checkbox" checked={!spOff.includes(s.id)} onChange={(e) => setSpOff(e.target.checked ? spOff.filter((x) => x !== s.id) : [...spOff, s.id])} />
+                      <i className="mush" style={{ background: colorFor(s.id)[0] }} />{s.nom}
+                    </label>
+                  ))}
+                </>
+              )}
+              {view === 'champis' && (
+                <p className="note"><b>+</b> bonnes chances · <b>++</b> tout est réuni ce jour-là. La nappe orange montre où ça se concentre. ★ sur les jours : meilleur jour à venir.</p>
+              )}
+              {view === 'zones' && (
+                <div className="swatches">
+                  <span><i style={{ background: STATUS_COLOR.ouverte }} />Ouverte</span>
+                  <span><i style={{ background: STATUS_COLOR.faible }} />Faible</span>
+                  <span><i style={{ background: STATUS_COLOR.prepare }} />Se prépare</span>
+                  <span><i style={{ background: STATUS_COLOR.fermee }} />Se ferme</span>
+                  <span><i style={{ background: STATUS_COLOR.rien }} />Rien</span>
+                </div>
+              )}
+              {view === 'essences' && (
+                <>
+                  <span className="label">Essences affichées</span>
+                  {Object.entries(HABITATS).map(([k, v]) => (
+                    <label key={k} className="check">
+                      <input type="checkbox" checked={!habOff.includes(k)} onChange={(e) => setHabOff(e.target.checked ? habOff.filter((x) => x !== k) : [...habOff, k])} />
+                      <i style={{ background: HAB_COLOR[k] }} />{v}
+                    </label>
+                  ))}
+                </>
+              )}
+            </div>
+          )}
+          <div className="tabs" role="tablist" aria-label="Affichage">
+            {[['champis', 'Champis', spOff.length], ['zones', 'Zones', spOff.length], ['essences', 'Essences', habOff.length]].map(([k, l, off]) => (
+              <button key={k} type="button" role="tab" aria-selected={view === k} aria-expanded={view === k && drawer}
+                onClick={() => { if (view === k) setDrawer(!drawer); else { setView(k); setDrawer(true); } }}>
+                {l}{off > 0 && <span className="badge">{off}</span>}<span className="caret" aria-hidden="true">{view === k && drawer ? '▾' : '▴'}</span>
+              </button>
+            ))}
+          </div>
+          <div className="tools">
+            <button type="button" className="chip" onClick={() => setPanel({ type: 'carnet' })}>Carnet</button>
+            <button type="button" className="chip" onClick={() => setPanel({ type: 'especes' })}>Espèces et seuils</button>
+          </div>
         </div>
       )}
 
