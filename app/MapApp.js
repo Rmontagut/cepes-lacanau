@@ -779,7 +779,7 @@ function Carnet({ sorties, species, enabled, at, geoPos, findForest, onClose, re
 const NUM_FIELDS = [
   ['pluieMm', 'Pluie déclenchante (mm)'], ['pluieJours', 'Sur combien de jours'],
   ['latenceMin', 'Ouverture (J+)'], ['latencePic', 'Pic (J+)'], ['latenceMax', 'Fermeture (J+)'],
-  ['tmaxMin', 'Max idéale, bas (°C)'], ['tmaxMax', 'Max idéale, haut (°C)'],
+  ['tmoyMin', 'Temp. moyenne idéale, bas (°C)'], ['tmoyMax', 'Temp. moyenne idéale, haut (°C)'], ['vieillissement', 'Vieillit vite à la douceur (0 à 1)'],
   ['gelSeuil', 'Gel (min °C)'], ['gelNuits', "Nuits de gel d'affilée qui cassent"], ['chaleurMax', 'Chaleur qui casse (max °C)'],
   ['secJours', 'Jours secs tolérés'], ['chocFroid', 'Bonus coup de froid (0 à 0,3)'],
 ];
@@ -798,7 +798,7 @@ function Especes({ species, editable, sorties, onClose, reload }) {
   const [edit, setEdit] = useState(null);
   const [msg, setMsg] = useState('');
   const [armed, setArmed] = useState(null);
-  const blank = { nom: '', latin: '', arbres: '', habitats: ['pin'], mois: [9, 10, 11], pluieMm: 25, pluieJours: 5, latenceMin: 7, latencePic: 10, latenceMax: 15, tmaxMin: 10, tmaxMax: 20, gelSeuil: -1, gelNuits: 1, chaleurMax: 25, secJours: 6, chocFroid: 0, conseils: [], confusions: '' };
+  const blank = { nom: '', latin: '', arbres: '', habitats: ['pin'], mois: [9, 10, 11], pluieMm: 25, pluieJours: 5, latenceMin: 7, latencePic: 10, latenceMax: 15, tmoyMin: 6, tmoyMax: 16, vieillissement: 0.5, gelSeuil: -1, gelNuits: 1, chaleurMax: 25, secJours: 6, chocFroid: 0, conseils: [], confusions: '' };
   async function save(e) {
     e.preventDefault();
     const b = { ...edit };
@@ -829,7 +829,7 @@ function Especes({ species, editable, sorties, onClose, reload }) {
         <div>
           {species.map((s) => (
             <div className="list-row" key={s.id}>
-              <div><strong>{s.nom}</strong><br /><span className="note">{(s.habitats || []).map((h) => HABITATS[h]).join(', ')} · {s.pluieMm} mm · J+{s.latenceMin} à J+{s.latenceMax}<br />Max {s.tmaxMin}–{s.tmaxMax} °C · gel sous {s.gelSeuil} °C{(s.gelNuits ?? 1) > 1 ? ` (${s.gelNuits} nuits)` : ''}{s.chocFroid ? ` · coup de froid +${Math.round(s.chocFroid * 100)} %` : ''}</span></div>
+              <div><strong>{s.nom}</strong><br /><span className="note">{(s.habitats || []).map((h) => HABITATS[h]).join(', ')} · {s.pluieMm} mm · J+{s.latenceMin} à J+{s.latenceMax}<br />Moy. {s.tmoyMin ?? (s.tmaxMin - 4)}–{s.tmoyMax ?? (s.tmaxMax - 4)} °C · gel sous {s.gelSeuil} °C{(s.gelNuits ?? 1) > 1 ? ` (${s.gelNuits} nuits)` : ''}{s.chocFroid ? ` · coup de froid +${Math.round(s.chocFroid * 100)} %` : ''}</span></div>
               {editable && (
                 <div className="actions">
                   <button type="button" className="btn ghost" onClick={() => setEdit({ ...s })}>Modifier</button>
@@ -854,7 +854,7 @@ function Especes({ species, editable, sorties, onClose, reload }) {
           </div>
           <label className="f wide">Mois de pousse (ex. 9,10,11)<input id="e-mois" value={edit.moisTxt ?? (edit.mois || []).join(',')} onChange={(e) => setEdit({ ...edit, moisTxt: e.target.value })} /></label>
           {NUM_FIELDS.map(([k, l]) => (
-            <label className="f" key={k}>{l}<input id={`e-${k}`} type="number" step={k === 'chocFroid' ? '0.01' : '0.5'} value={edit[k] ?? (k === 'gelNuits' ? 1 : k === 'chocFroid' ? 0 : '')} onChange={set(k)} required /></label>
+            <label className="f" key={k}>{l}<input id={`e-${k}`} type="number" step={k === 'chocFroid' || k === 'vieillissement' ? '0.05' : '0.5'} value={edit[k] ?? (k === 'gelNuits' ? 1 : k === 'chocFroid' ? 0 : k === 'vieillissement' ? 0.5 : k === 'tmoyMin' ? (edit.tmaxMin ?? 16) - 4 : k === 'tmoyMax' ? (edit.tmaxMax ?? 20) - 4 : '')} onChange={set(k)} required /></label>
           ))}
           <label className="f wide">Milieu<input id="e-arbres" value={edit.arbres || ''} onChange={set('arbres')} /></label>
           <label className="f wide">Conseils (un par ligne)<textarea id="e-conseils" value={edit.conseilsTxt ?? (edit.conseils || []).join('\n')} onChange={(e) => setEdit({ ...edit, conseilsTxt: e.target.value })} /></label>
