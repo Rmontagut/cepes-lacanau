@@ -710,6 +710,17 @@ function Detail({ f, sid, evalFeature, dayIso, meteo, onBack, onClose }) {
         {s.conseils?.length > 0 && <ul>{s.conseils.map((c) => <li key={c}>{c}</li>)}</ul>}
       </section>
       {s.confusions && <p className="confusion"><strong>Confusions :</strong> {s.confusions}</p>}
+      {s.sources?.length > 0 && (
+        <section>
+          <span className="label">Sur quoi repose ce score</span>
+          <ul className="sources">
+            {s.sources.map((x) => (
+              <li key={x.quoi}><span className={`fiab f-${x.fiab}`}>{x.fiab}</span> {x.quoi}<br /><small>{x.ref}</small></li>
+            ))}
+          </ul>
+          <p className="note">« mesuré » : étude de terrain. « règle » : consensus de cueilleurs et guides régionaux. « estimé » : pas de donnée publiée, à caler avec ton carnet. Rien n'a encore été calibré en forêt landaise.</p>
+        </section>
+      )}
     </Sheet>
   );
 }
@@ -781,7 +792,7 @@ const NUM_FIELDS = [
   ['latenceMin', 'Ouverture (J+)'], ['latencePic', 'Pic (J+)'], ['latenceMax', 'Fermeture (J+)'],
   ['tmoyMin', 'Temp. moyenne idéale, bas (°C)'], ['tmoyMax', 'Temp. moyenne idéale, haut (°C)'], ['vieillissement', 'Vieillit vite à la douceur (0 à 1)'],
   ['gelSeuil', 'Gel (min °C)'], ['gelNuits', "Nuits de gel d'affilée qui cassent"], ['chaleurMax', 'Chaleur qui casse (max °C)'],
-  ['secJours', 'Jours secs tolérés'], ['chocFroid', 'Bonus coup de froid (0 à 0,3)'],
+  ['secJours', 'Jours secs tolérés'], ['chocFroid', 'Bonus coup de froid (0 à 0,3)'], ['chaleurSeche', 'Stoppe si moy. 5 j au-dessus (°C, 99 = jamais)'],
 ];
 
 function Especes({ species, editable, sorties, onClose, reload }) {
@@ -854,7 +865,7 @@ function Especes({ species, editable, sorties, onClose, reload }) {
           </div>
           <label className="f wide">Mois de pousse (ex. 9,10,11)<input id="e-mois" value={edit.moisTxt ?? (edit.mois || []).join(',')} onChange={(e) => setEdit({ ...edit, moisTxt: e.target.value })} /></label>
           {NUM_FIELDS.map(([k, l]) => (
-            <label className="f" key={k}>{l}<input id={`e-${k}`} type="number" step={k === 'chocFroid' || k === 'vieillissement' ? '0.05' : '0.5'} value={edit[k] ?? (k === 'gelNuits' ? 1 : k === 'chocFroid' ? 0 : k === 'vieillissement' ? 0.5 : k === 'tmoyMin' ? (edit.tmaxMin ?? 16) - 4 : k === 'tmoyMax' ? (edit.tmaxMax ?? 20) - 4 : '')} onChange={set(k)} required /></label>
+            <label className="f" key={k}>{l}<input id={`e-${k}`} type="number" step={k === 'chocFroid' || k === 'vieillissement' ? '0.05' : '0.5'} value={edit[k] ?? (k === 'gelNuits' ? 1 : k === 'chocFroid' ? 0 : k === 'vieillissement' ? 0.5 : k === 'chaleurSeche' ? 99 : k === 'tmoyMin' ? (edit.tmaxMin ?? 16) - 4 : k === 'tmoyMax' ? (edit.tmaxMax ?? 20) - 4 : '')} onChange={set(k)} required /></label>
           ))}
           <label className="f wide">Milieu<input id="e-arbres" value={edit.arbres || ''} onChange={set('arbres')} /></label>
           <label className="f wide">Conseils (un par ligne)<textarea id="e-conseils" value={edit.conseilsTxt ?? (edit.conseils || []).join('\n')} onChange={(e) => setEdit({ ...edit, conseilsTxt: e.target.value })} /></label>
